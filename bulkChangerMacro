@@ -1,0 +1,729 @@
+
+'MacroName:Bulk changer
+'MacroDescription:Gets data from text file and runs set tasks over records
+'Created by: Hazel Loughrey (National Library)
+'Last edit: 21/08/2023
+
+'******************** Info *******************************************
+'Comma delimination between parts, new line between entities.
+'E.g.: LCCN, Orcid:123456
+
+'--What it does--:
+'Runs dialog
+'Validates dialog input, confirms task with user
+'Runs appropriate tasks for each task
+'Creates local file, saves edited records to it for review
+'Outputs results file to same directory as source file.
+
+'To add a new task:
+'- Add to tasks() array (adjust range as neccessary)
+'- Add to TaskSelection
+'The base of this macro is just an interface and a file reader which you can add tasks to.
+
+'*********************************************************************
+Declare Function LCCNSearchLock(LCCN) As Variant
+Declare Function Review(task, inputPath) As Variant
+
+Declare Function SaveLocal() As String
+
+Declare Function FormatField(field, fData, fType) As String
+Declare Function FetchAllFind(field$, find$) As Variant
+Declare Function FindReplace(find$, replace$, yourString$)
+Declare Function StringCounter(yourString$, find$) As Integer
+Declare Function DeleteAllField(tag) As Variant
+
+Global inputPath, outputPath
+Global lineValue() As Variant
+Global CS As Object
+Global username As String
+Global driveaddy As String
+
+
+Option Explicit
+
+Sub Main
+   
+   'Dim CS As Object
+On Error Resume Next
+   Set CS = GetObject(,"Connex.Client")
+On Error GoTo 0
+   If CS Is Nothing Then
+      Set CS = CreateObject("Connex.Client")
+   End If
+ 
+   
+'********************************************************************* Setup, interface, task selection section ***************************************************************************************************************************
+  
+  
+'===================================
+'Log in, get userName, find shared drive
+'===================================
+
+ '/Checks if online. If login details saved then logs you in. Otherwise tells user to log in and ends macro.
+ 
+   If CS.IsOnline = False Then
+
+      CS.Logon "", "", ""
+   
+      If CS.IsOnline = False Then
+         MsgBox "Please log in first"
+         Exit Sub
+      End If
+
+   End If
+   
+   'get computer username for file addresses
+   username = (Environ("UserName"))
+   Dim addyError, addyCheck As String
+   addyError = ""
+   
+   
+   '*********   EDIT ADDRESS AS NEEDED:   ****************************************************************************************
+    driveAddy = "[your file address here]\*"
+   '******************************************************************************************************************************
+
+   'the dir function "returns a string representing the name of a file, directory, or folder". 16 = "directories or folders in addition to files with no attributes"
+   'This is just a means for us to check the macro can find the folder before attempting to save.
+   addyCheck = Dir(driveaddy, 16)
+
+    
+    If addyCheck = "" Then
+      addyError = addyError + chr(10) + "> drive not found. Attemped to access:" + chr(10) + chr(10) + driveaddy + chr(10) + chr(10)
+   'specified drive failed to be found, attempt C drive address instead
+      driveaddy = "C:\Users\" & userName & "\AppData\Roaming\OCLC\Connex\Db" 
+      
+      If addyCheck = "" Then
+         addyError = addyError + chr(10) + "> C drive not found. Attemped to access:" + chr(10) + chr(10) + driveaddy + chr(10) + chr(10)
+      Else 
+         addyError = addyError + "Attempting to save to C:\Users\" & userName & "\AppData\Roaming\OCLC\Connex\Db"  + chr(10)
+
+      End If
+    End If
+   
+ If addyError <> "" Then
+   addyError = "==================== FILE PATH ERROR ===================" + chr(10) + chr(10) + addyError
+   addyError = addyError + "Check you are connected to the drive/s. Alternatively check address and/or code in the BulkAdder macro."
+   Msgbox(addyError)
+  End If
+ 
+'====================================
+'Dialogue box
+'====================================
+   Dim x As Integer
+   Dim taskList, instructions, status As String
+   
+   '--------- TASK LIST: -----------
+   Dim tasks(15) As Variant
+   tasks(0) = "Add 024s, delete 375s"
+   tasks(1) = "Delete 375s"
+   'tasks(2) = [-Your task here!-]
+
+   
+   x = 0
+   
+   Do Until x = UBound(tasks())
+      
+      taskList = taskList + tasks(x) + chr$(9)
+      
+   x = x +1 
+   Loop
+
+   instructions = "Select a task. " & chr(10) & "You will need a text file containing LCCNs and data seperated by commas and hyphens (see example on main screen). " &chr(10)&chr(10) & "For input file path, get the file path and add a backslash followed by the file name including extension." & chr(10) & chr(10)
+DialogLabel:
+' accross, down, width, height 
+Begin Dialog Interface 290, 200, "Bulk change"   
+
+   PushButton 235, 2, 50, 15, "Help", .Help
+   
+   GroupBox  5, 15, 280, 40, ""
+   Text  10, 22, 220, 9, "Select task:"
+   DropComboBox  10, 37, 100, 40, taskList, .task
+   
+   GroupBox  5, 58, 280, 62, ""
+   Text  10, 65, 230, 9, "Enter input file path, including file name and extension:"
+   TextBox  10, 80, 270, 15, .inputPath
+   Text  10, 130, 230, 56, "Expected format of data in text file: " & chr(10) & chr(10) & "LCCN, type: id, type: id" & chr(10) & "LCCN, type: id, type: id"& chr(10) & "etc."
+ 
+   CancelButton  5, 182, 50, 14
+   PushButton 235, 182, 50, 15, "Go!", .Go
+   
+End Dialog 
+
+
+   Dim BoxInfo As Interface
+   Dim BoxInput As Integer
+   BoxInput = Dialog(BoxInfo)
+   
+   inputPath = BoxInfo.inputPath
+   
+   If Len(inputPath) > 4 Then
+   outputPath = Mid(inputPath, 1, Len(inputpath) - 4) + "Result.txt"
+   End If
+   
+   
+'=============================================================
+'Button controls
+'=============================================================
+   Select Case BoxInput
+   
+   '--------------------
+   Case 0 'Cancel button
+   '--------------------
+   
+      Exit Sub
+   
+   '--------------------
+   Case 1 'Help
+   '--------------------
+   
+      MsgBox(instructions)
+      GoTo DialogLabel
+   
+   '--------------------
+   Case 2  'Go button
+   '--------------------
+      
+      '----Is file path accessible?------------------
+      If Dir(inputPath, 0) = "" Or Dir(inputPath, 0) = "Connex.ico" Then
+         Msgbox("Input path not found. Did you forget the file name with extension? Please try again.")
+         GoTo DialogLabel
+      End If
+      
+      '--------Input validated, confirm with user---------
+      status = Review(boxInfo.task, inputPath)
+         
+      If status = "Confirmed" Then
+      
+         GoTo TaskSelection
+        
+      ElseIf status = "Cancelled" Then
+         
+         GoTo DialogLabel
+            
+      Else
+         
+         Msgbox("Something went wrong.")
+            
+      End If
+      
+      '---------------------------------
+      'Do appropriate task
+      '---------------------------------
+TaskSelection:
+
+'--------------------------------------------
+'Read the file, put stuff in dynamic array
+'--------------------------------------------
+   Dim lineCount, fileNumber, delimPoint As integer
+   Dim importData As String
+   
+   x = 1
+   lineCount = 0
+
+   Dim lineValue() as variant
+   fileNumber = FreeFile
+ 
+ Open inputPath For Input As fileNumber
+ 
+   Do Until Eof(fileNumber)
+   
+      ReDim Preserve lineValue(x)
+      Line Input #fileNumber, importData
+      If importData <> "" And importData <> chr(10) Then
+         lineValue(x) = importData  
+      End If
+      
+      x = x + 1
+      
+   Loop
+ 
+ Close fileNumber 
+ 
+ lineCount = x - 1
+ 
+
+      Select Case boxInfo.task
+      
+      '==========================================================
+      Case tasks(0)
+      '==========================================================
+      
+      '----------------------------------------
+      'Split array into parts, seach LCCN, add field
+      '----------------------------------------
+      Dim LCCN, fieldCont, searchResult, outcome, id, iType, recStat, gendData, saveStat As String
+      Dim findField, findType As Variant
+      Dim failures, editNum, colCount As Integer
+
+  
+      x = 1
+   
+      Do Until x > lineCount
+         If InStr(lineValue(x), ",") = 0 Or InStr(lineValue(x), ":") = 0 Then
+            outcome = ">Line " & x & " missing comma or colon. Skipped."
+            GoTo Skip
+         End If
+         
+         If lineValue(x) <> 0 Or Trim(lineValue(x)) <> "" Then
+       
+            delimPoint = InStr(lineValue(x), ",")
+            
+            If delimPoint = 0 Then
+               outcome = outcome + ">Line " & x & " is missing a delimiter and was not processed."
+            Else
+            
+               If Left(lineValue(x), 1) <> "," Then
+                  lineValue(x) = lineValue(x) + ","
+               End If
+               '------Split string on delimiter------
+               linevalue(x) = FindReplace(" ", "", linevalue(x))
+               LCCN = Trim(Mid(lineValue(x), 1, delimPoint - 1))
+               fieldCont = Trim(Mid(lineValue(x), delimPoint + 1, Len(lineValue(x)) - delimPoint))
+
+               '-------check LCCN is present---------
+               searchResult = LCCNSearchLock(LCCN)
+         
+               If searchResult = "Found" And CS.ItemType = 3 Then
+                  
+                  colCount = StringCounter(fieldCont, ":")
+                  outcome = outcome + "-Line " & x & " ("& LCCN &"): "  
+                                    
+                  Do Until InStr(fieldCont, ":") = 0
+                     
+                     If colCount = 1 Then
+                  
+                        iType = Mid(fieldcont, 1, InStr(fieldcont, ":") - 1)
+                        On Error GoTo ErrorHandler
+                        id = Mid(fieldCont, InStr(fieldCont, ":") + 1, Len(fieldCont) - InStr(fieldCont, ":"))
+                        id = Mid(id, 1, InStr(id, ",")-1)
+                  
+                     ElseIf colCount > 1 Then
+                  
+                        If Left(fieldCont, 1) <> "," Then
+                        'makes looping easier
+                           fieldCont = fieldCont + ","
+                        End If
+                        
+                        On Error GoTo ErrorHandler
+                        id = Mid(fieldCont, InStr(fieldCont, ":") + 1, Len(fieldCont) - InStr(fieldCont, ":"))
+                        On Error GoTo ErrorHandler
+                        id = Mid(id, 1, InStr(id, ",")-1)
+                        iType = Mid(fieldcont, 1, InStr(fieldcont, ":") - 1)
+                    
+                     End If
+
+                     fieldCont = Mid(fieldCont, Len(itype) + Len(id) + 3, Len(fieldCont) - 1)
+                        
+                     findField = FetchAllFind("024", id)
+                     findType = FetchAllFind("024", iType)
+                        
+                     If findField = True Or findType = True Then
+                        outcome = outcome + " REJECTED: " & itype & " already exists."
+                        outcome = FindReplace("-Line " & x & " (" & LCCN , ">Line " & x & " (" & LCCN, outcome)
+                           
+                     ElseIf findField = False And findType = False Then
+                        'LOCK RECORD
+                        CS.Lock
+                        If CS.AddField(1, FormatField("024", id, iType)) = True Then
+                            outcome = outcome & " " & itype & " added; "
+                        End If
+                           
+                        If DeleteAllField("375") = True  Then
+                             outcome = outcome & " 375 deleted; "
+                        End If
+                      End If
+                  Loop 
+              Else
+                  outcome = outcome + ">Line " & x & "(" & lccn & ") " & searchResult  & "."  
+              End If                
+           End If
+         End If
+         
+      CS.QueryRecordStatus "EDIT", recStat
+      
+      'If record was edited, save it to the local file     
+      If recStat = "Y" Then
+         saveStat = SaveLocal()
+         
+         If InStr(saveStat, ">") = 0 Then      
+            editNum = editNum + 1
+         Else
+            outcome = outcome & ">Error: " & saveStat
+         End If
+      End If
+Skip:
+      outcome = outcome & Chr(10)  
+      CS.CloseRecord(false)      
+      x = x + 1
+      Loop
+ 
+       failures = Stringcounter(outcome, ">")
+   
+       outcome = "Rejections or failures on " & failures & " lines. " & "Records edited: " & editNum & chr(10) & outcome
+       
+       '==============
+       Case tasks(1)
+       '==============
+         x =0
+         editNum = 0
+         
+         Do Until x > lineCount
+            LCCN = linevalue(x)
+         
+            searchResult = LCCNSearchLock(LCCN)
+            
+            If searchResult = "Found" And CS.ItemType = 3 Then
+               outcome = outcome + "-Line " & x & " ("& LCCN &"): "
+            End If
+         
+            CS.Lock
+         
+            If DeleteAllField("375") = True  Then
+               outcome = outcome & " 375 deleted; "
+            End If
+         
+            CS.QueryRecordStatus "EDIT", recStat
+      
+            'If record was edited, save it to the local file     
+            If recStat = "Y" Then         
+               saveStat = SaveLocal()
+               
+               If InStr(saveStat, ">") = 0 Then      
+                  editNum = editNum + 1
+               Else
+                  outcome = outcome & ">Error: " & saveStat
+               End If
+            End If
+
+            outcome = outcome & Chr(10)  
+            CS.CloseRecord(false)      
+            x = x + 1
+
+            failures = Stringcounter(outcome, ">")
+            outcome = "Rejections or failures on " & failures & " lines. " & "Records edited: " & editNum & chr(10) & outcome
+         Loop
+      '--------------- 
+      'Case tasks(2)
+      '---------------
+      '[-Your task here!-]
+      
+      '---------------
+      Case Else
+      '---------------
+      Msgbox("Please select a task from the dropdown list." & boxInfo.task & "|")
+      GoTo DialogLabel
+   
+      End Select
+    
+   End Select
+
+'----------------------------------------------
+'Output results to text file
+'----------------------------------------------
+
+dim oldName As String
+
+'trim off ".txt" if it is there
+oldName = Mid(inputPath, 1, Len(inputPath) - 5)
+oldName = oldName + FindReplace(".txt", "", Right(inputPath, 5))
+
+Name inputPath As oldName + "_DONE.txt"
+  
+'Because message boxes have character limits. 
+Open outputPath For Output As #1 
+' Close before reopening in another mode. 
+ Write #1, outcome
+Close #1 
+   dim resultsfile as string
+   resultsFile = "Full results can be found here: " & chr(10) & outputPath
+   msgbox("====================== LOG ====================" & chr(10) & chr(10) & "Rejections or failures on " & failures & " lines." & chr(10) & "Records edited: " & editNum & chr(10) & chr(10) & resultsFile)   
+    
+   'Frees storage space, ensures this read is deleted between tasks
+   Erase lineValue
+   
+   CS.Search "AL","AND ro:'SFNumber'"
+
+'Set back to default. If Connexion opens without a G drive connection it prompts errors
+'CS.CreateLocalFile "C:\Users\" & username & "\AppData\Roaming\OCLC\Connex\Db\DefaultAuth.auth.db"
+
+   Exit Sub
+ErrorHandler:
+   
+   print("Errored with: " & itype & " / " & id)
+   outcome = outcome & ">Line " & x & " Bad data - missing delimiters? LCCN " & lccn & " not added to, not saved."
+   GoTo Skip
+
+End Sub 
+
+'============================================
+Function Review(task, inputPath)
+'============================================
+
+' accross, down, width, height 
+Begin Dialog Review 200, 150, "Review"
+   text 5, 10, 160, 20, "This task may take several minutes, depending on file size."
+   
+   GroupBox  5, 30, 190, 95, ""
+   text 10, 40, 150, 20, "TASK:"
+   text 10, 50, 150, 20, task
+   text 10, 70, 150, 20, "FROM:"
+   text 10, 80, 180, 40, inputPath
+   PushButton 5, 132, 40, 15, "Cancel"
+   PushButton 155, 132, 40, 15, "Confirm"
+   
+End Dialog
+
+   Dim reviewInfo As Review
+   Dim reviewInput As Integer
+   
+   reviewInput = Dialog(reviewInfo)
+   
+   Select Case reviewInput
+   
+   Case 1
+
+      Review = "Cancelled"
+   
+   Case 2 
+
+      Review = "Confirmed"
+   
+   End Select
+
+End Function
+
+
+'********************************************************************* General functions section *******************************************************************************************************************************************
+
+
+'===================================== 
+Function LCCNSearchLock(LCCN)
+'=====================================
+'Searches LCCN, locks record
+
+Dim result As String
+Dim test As Variant
+
+   result = "Error: Unknown (LCCN search)"
+   
+   If LCCN <> 0  Then
+   
+      test = CS.Search("AF", "ln:" & LCCN)
+      
+   
+      If test <= 0 Then
+      
+         result = "Error: LCCN not found."
+   
+      Else
+         If CS.ItemType <> 3 Then
+            CS.GetListItem 1
+         End If
+         
+         If FetchAllFind("010", LCCN) = True Then
+            
+            result = "Found"
+            
+
+         Else
+      
+           result = "Error: LCCN mismatch on loaded record. (" & LCCN & ")"
+   
+         End If
+      End If
+   End If
+   
+  LCCNSearchLock = result
+
+   
+End Function
+
+'===================================================================================
+Function SaveLocal()
+'Sets workflow status, saves open record to online save file
+'===================================================================================
+'Returns string with result.
+Dim sDate, outcome As String
+Dim saveFileNum As Integer
+saveFileNum = 0
+
+   If CS.ItemType = 3 Or CS.ItemType = 18 Or CS.ItemType = 4 Or CS.ItemType = -1 Then
+               
+      sDate = FindReplace("/", "-", Date)
+       
+      'Creates file if doesn't exist, sets as default    
+      CS.CreateLocalFile driveaddy & username & "BulkProcess" & sDate & ".auth.db"
+      CS.CreateLocalFile driveaddy & username & "BulkProcess" & sDate & ".auth.db"
+               
+      'Save to local file, check success
+      On Error Resume Next
+      CS.SaveToLocalFile false, false
+      
+      CS.QueryRecordStatus "SAVE", saveFileNum
+               
+      If saveFileNum > 0 Then
+            outcome = outcome & saveFileNum
+            
+      
+      ElseIf saveFileNum <= 0 Or Str(saveFileNum) = "" Then
+         outcome = outcome + ">Failure to save to local save file: save file # not found."
+         CS.CloseRecord(false)
+      End If
+      
+   Else
+      outcome = ">Error: Failure to save to local save file: record type not accepted."
+   End If
+
+SaveLocal = outcome
+End Function
+
+'/==================================================================================
+Function FetchAllFind(field$, find$)
+'Returns a boolean True if find$ is found in any specified field$
+'/================================================================================== 
+   Dim CS As Object
+   On Error Resume Next
+   Set CS  = GetObject(,"Connex.Client")
+   On Error GoTo 0
+   If CS  Is Nothing Then
+      Set CS  = CreateObject("Connex.Client")
+   End If
+   
+   Dim tempString As String
+   Dim fieldInstance As Integer
+   fieldInstance = 1
+   
+   Dim bool As Variant
+   bool = False
+   tempString = lcase(tempString)
+
+   Do Until CS.GetField(field$, fieldInstance, tempString) = False
+   
+   tempstring = lcase(FindReplace(" ", "", tempstring))
+   
+      If InStr(tempString, find$) <> 0 Then
+         bool = True
+         Exit Do
+      End If 
+      
+      fieldInstance = fieldInstance + 1 
+   
+   Loop
+
+   FetchAllFind = bool
+   
+End Function
+
+'===================================================================================
+Function FormatField(field, fieldCont, fType)
+'===================================================================================
+'You could add cases to this, and all your formatting dreams can come true...
+
+If fieldCont <> "" Then
+
+   Select Case field
+
+      Case "024"
+   
+         Select Case fType
+            Case "viaf"
+               FormatField = "0247 " + fieldCont + " " + Chr(223) + "2 viaf" + " " + Chr(223) + "1 " + "http://www.viaf.org/viaf/" + fieldCont
+            Case "orcid"
+               FormatField = "0247 " + fieldCont + " " + Chr(223) + "2 orcid" + " " + Chr(223) + "1 " + "https://orcid.org/" + fieldCont
+            Case "wikidata"
+               FormatField = "0247 " + fieldCont + " " + Chr(223) + "2 wikidata" + " " + Chr(223) + "1 " + "http://www.wikidata.org/entity/" + fieldCont
+            Case "isni"
+               FormatField = "0247 " + fieldCont + " " + Chr(223) + "2 isni" + " " + Chr(223) + "1 " + "https://isni.org/isni/" + fieldCont
+            Case "ulan"
+               FormatField = "0247 " + fieldCont + " " + Chr(223) + "2 gettyulan" + " " + Chr(223) + "1 " + "http://vocab.getty.edu/ulan/" + fieldCont + "-agent"
+            Case Else
+               FormatField = "> Error: 024 type" & fType & " not recognised."
+         End Select
+      
+      Case Else
+   
+      FormatField = "> Failed to format field."
+   
+   End Select
+   
+End If
+End Function
+
+
+'=====================================================================================
+Function StringCounter(yourString$, find$)
+'=====================================================================================
+
+  If InStr(yourString$, find$) Then
+      Dim count As Integer
+      Dim rightCut, editedString As String
+
+      editedString = yourString$
+   
+      Do Until InStr(editedString, find$) = 0 
+         rightCut = Mid(editedString, InStr(editedString, find$) + Len(find$), Len(editedString))
+         editedString = rightCut
+         count = count + 1
+      Loop  
+      
+   End If
+
+   StringCounter = count
+   End Function
+   
+'/==================================================================================
+Function FindReplace(find$, replace$, yourString$)
+'/==================================================================================   
+
+   Dim editedString, leftCut, rightCut As String
+   
+   editedString = yourString$
+   
+   If InStr(yourString$, find$) Then
+   
+         Do Until InStr(editedString, find$) = 0
+         leftCut = Left(editedString, InStr(editedString, find$) - 1)
+         rightCut = Mid(editedString, InStr(editedString, find$) + Len(find$), Len(editedString))
+         editedString = leftCut + replace$ + rightCut
+      Loop
+   
+   End If
+
+   FindReplace = editedString
+   
+End Function
+
+
+'=====================================================================================
+Function DeleteAllField(tag)
+'=====================================================================================
+'Count the fields, delete the fields from last instance to first
+'Have to count them as if you just delete them the instance of field will change as you go and it won't delete all of them.
+
+Dim CS As Object
+   On Error Resume Next
+   Set CS  = GetObject(,"Connex.Client")
+   On Error GoTo 0
+   If CS Is Nothing Then Set CS  = CreateObject("Connex.Client")
+   
+   Dim x As Integer
+   Dim fieldVal as String
+   Dim bool As Variant
+   
+   bool = False
+   x = 1
+   
+   Do Until CS.GetField(tag, x, fieldVal) = False
+      x = x + 1
+   Loop
+   
+   x = x - 1
+   
+   Do Until CS.DeleteField (tag, x) = False
+      x = x - 1
+      bool = True  
+   Loop
+   
+   DeleteAllField = bool
+   
+End Function
