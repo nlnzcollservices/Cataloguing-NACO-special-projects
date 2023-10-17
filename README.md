@@ -12,7 +12,7 @@ then counts the specified number of highest occurring access points. Outputs a C
     It will output:
     - A Excel spreadsheet summarising the results (name using spreadsheet_filename variable)
     - output_VIAF_IDs.txt – all the related identifiers found in one file
-    - output_VIAF_IDs_<n>_<todays date>.txt – splits file above into multiple files of up to 50 lines long, to be used in Connexion Client with the Bulk Changer macro.
+    - output_VIAF_IDs_1_todays_date.txt – splits file above into multiple files of up to 50 lines long, to be used in Connexion Client with the Bulk Changer macro.
     - output_different_ids.txt – any differences of identifiers found between id.loc.gov and VIAF.
     - output_existings.txt – any records that have the selected identifiers already in id.loc.gov.
 
@@ -20,7 +20,7 @@ then counts the specified number of highest occurring access points. Outputs a C
     It will output:
     - A Excel spreadsheet summarising the results (name using spreadsheet_filename variable)
     - output_VIAF_IDs.txt – all the related identifiers found in one file
-    - output_VIAF_IDs_<n>_<todays date>.txt – splits file above into multiple files of up to 50 lines long, to be used in Connexion Client with the Bulk Changer macro.
+    - output_VIAF_IDs_1_todays_date.txt – splits file above into multiple files of up to 50 lines long, to be used in Connexion Client with the Bulk Changer macro.
     - output_different_ids.txt – any differences of identifiers found between id.loc.gov and VIAF.
     - output_existings.txt – any records that have the selected identifiers already in id.loc.gov.
 
